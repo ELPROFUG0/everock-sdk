@@ -30,7 +30,9 @@ try {
   const metadata=packageMetadata;
   metadata.main='./dist/index.js';metadata.types='./dist/index.d.ts';
   metadata.exports=Object.fromEntries(Object.entries(metadata.exports).map(([key,path])=>[key,{types:path.replace('./src/','./dist/').replace('.ts','.d.ts'),import:path.replace('./src/','./dist/').replace('.ts','.js')} ]));
-  metadata.version=version;delete metadata.dependencies['@everock/shared'];metadata.dependencies.zod='^3.24.1';
+  metadata.version=version;delete metadata.dependencies['@everock/shared'];
+  const sharedMetadata = JSON.parse(await readFile(resolve(sdk, '../shared/package.json'), 'utf8'));
+  metadata.dependencies.zod = sharedMetadata.dependencies.zod;
   delete metadata.private;delete metadata.devDependencies;metadata.files=['dist','bin','README.md','LICENSE','NOTICE'];metadata.publishConfig={access:'public'};delete metadata.scripts;
   await writeFile(join(temporary,'package.json'),JSON.stringify(metadata,null,2));
   const output=execFileSync('npm',['pack','--ignore-scripts','--json','--pack-destination',destination],{cwd:temporary,encoding:'utf8'});
