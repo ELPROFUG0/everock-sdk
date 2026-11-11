@@ -1,0 +1,24 @@
+{
+  "name": "@everock/vite",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Vite integration for Everock \u2014 a plugin plus init() for any Vite app (React, Vue, Svelte, Solid).",
+  "exports": {
+    ".": "./src/index.ts",
+    "./client": "./src/client.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@everock/sdk": "workspace:*"
+  },
+  "peerDependencies": {
+    "vite": ">=5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2"
+  },
+  "license": "Apache-2.0"
+}

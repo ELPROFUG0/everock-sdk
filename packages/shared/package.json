@@ -1,0 +1,13 @@
+{
+  "name": "@everock/shared",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./browser-settings": "./src/browser-settings.ts"
+  },
+  "dependencies": {
+    "zod": "^3.24.1"
+  }
+}

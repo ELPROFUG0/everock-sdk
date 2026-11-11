@@ -1,0 +1,30 @@
+{
+  "name": "@everock/next",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Next.js integration for Everock \u2014 one install for error tracking, service detection, and telemetry.",
+  "exports": {
+    "./config": "./src/config.ts",
+    "./server": "./src/server.ts",
+    "./route-handler": "./src/route-handler.ts",
+    "./provider": "./src/provider.tsx",
+    "./instrument-client": "./src/instrument-client.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@everock/sdk": "workspace:*"
+  },
+  "peerDependencies": {
+    "next": ">=15",
+    "react": ">=18"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.0.2",
+    "react": "^19.0.0"
+  },
+  "license": "Apache-2.0"
+}

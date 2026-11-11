@@ -1,0 +1,23 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "everock-sdk"
+version = "0.1.0b1"
+description = "Everock telemetry exporter and Python framework integrations"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+readme = "README.md"
+dependencies = ["opentelemetry-sdk>=1.30,<2"]
+
+[project.optional-dependencies]
+fastapi = ["opentelemetry-instrumentation-fastapi>=0.51b0,<1"]
+flask = ["opentelemetry-instrumentation-flask>=0.51b0,<1"]
+django = ["opentelemetry-instrumentation-django>=0.51b0,<1"]
+httpx = ["opentelemetry-instrumentation-httpx>=0.51b0,<1"]
+requests = ["opentelemetry-instrumentation-requests>=0.51b0,<1"]
+test = ["pytest>=8,<10", "fastapi>=0.115,<1", "flask>=3,<4", "django>=5,<6", "httpx>=0.27,<1", "requests>=2,<3"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/everock"]
