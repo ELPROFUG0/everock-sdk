@@ -14,6 +14,10 @@ try {
     for (const file of ['LICENSE', 'NOTICE']) assert(listing.includes(`package/${file}`), `${archive}: missing ${file}`);
     assert(!listing.some(file => /(^|\/)\.env(?:\.|$)|\.pem$|node_modules|^package\/src\//.test(file)), 'Unexpected private/source files');
     const metadata = JSON.parse(execFileSync('tar', ['-xOf', archive, 'package/package.json'], { encoding: 'utf8' }));
+    if (metadata.name === '@everock/sdk') {
+      const shared = JSON.parse(await readFile(resolve('packages/shared/package.json'), 'utf8'));
+      assert.equal(metadata.dependencies.zod, shared.dependencies.zod, 'SDK must ship the tested validator range');
+    }
     assert.equal(metadata.license, 'Apache-2.0');
     assert.equal(metadata.publishConfig.access, 'public');
     assert(!metadata.private);
