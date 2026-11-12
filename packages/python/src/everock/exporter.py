@@ -184,7 +184,11 @@ class EverockSpanExporter(SpanExporter):
             self._count('attempts')
             delay = 0.1 * 2 ** attempt
             try:
-                request = Request(self.endpoint, data=body, headers={'Content-Type': 'application/json', 'x-everock-key': self.public_key})
+                request = Request(self.endpoint, data=body, headers={
+                    'Content-Type': 'application/json',
+                    'User-Agent': 'Everock-Python-SDK',
+                    'x-everock-key': self.public_key,
+                })
                 with self._opener.open(request, timeout=self.timeout) as response:
                     return 'delivered' if 200 <= response.status < 300 else 'rejected'
             except HTTPError as error:
