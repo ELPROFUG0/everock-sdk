@@ -12,7 +12,8 @@
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit false --declaration false --rootDir src --outDir dist",
-    "prepack": "npm run build"
+    "prepack": "npm run build",
+    "test": "npm run build && node --test test/*.test.mjs"
   },
   "dependencies": {
     "chokidar": "^4.0.3"

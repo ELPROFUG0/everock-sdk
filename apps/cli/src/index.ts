@@ -14,15 +14,16 @@ import {detectFramework} from './detect-framework.js';
  * Auth is a personal API key (see the "Conectar" modal). The linked project id
  * lives in ./.everock.json so `dev` knows what to sync.
  */
-import { mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync, statSync, chmodSync, unlinkSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync, statSync, lstatSync, realpathSync, renameSync, chmodSync, unlinkSync } from 'node:fs';
 import { execFileSync, spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join, relative, resolve, sep } from 'node:path';
 import { parseArgs } from 'node:util';
 import chokidar from 'chokidar';
 
 // ─── config (global key) + link (per-project, in cwd) ───
-const CONFIG_DIR = process.env.EVEROCK_CONFIG_DIR ?? join(homedir(), '.everock');
+const CONFIG_DIR = resolve(process.env.EVEROCK_CONFIG_DIR ?? join(homedir(), '.everock'));
 const CONFIG_FILE = join(CONFIG_DIR, 'config.json');
 const LINK_FILE = join(process.cwd(), '.everock.json');
 
@@ -55,7 +56,9 @@ async function apiCall<T>(
   path: string,
   init?: { method?: string; body?: unknown },
 ): Promise<T> {
+  safeWebUrl(cfg.apiUrl);
   const res = await fetch(`${cfg.apiUrl}${path}`, {
+    redirect: 'error',
     method: init?.method ?? 'GET',
     headers: {
       authorization: `Bearer ${cfg.apiKey}`,
@@ -87,11 +90,17 @@ const IGNORE = new Set([
 ]);
 const MAX_FILE = 10 * 1024 * 1024; // 10 MB per file
 
+function excludedFromSync(name: string): boolean {
+  return IGNORE.has(name) || name === '.env' || name.startsWith('.env.') ||
+    name === '.npmrc' || name === '.pypirc' || /\.(pem|key|p12|pfx)$/i.test(name);
+}
+
 function walk(root: string, dir = root, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
-    if (IGNORE.has(name)) continue;
+    if (excludedFromSync(name)) continue;
     const full = join(dir, name);
-    const st = statSync(full);
+    const st = lstatSync(full);
+    if (full === CONFIG_FILE || (full === CONFIG_DIR && full !== root)) continue;
     if (st.isDirectory()) walk(root, full, out);
     else if (st.isFile() && st.size <= MAX_FILE) out.push(full);
   }
@@ -134,8 +143,8 @@ function logoContentType(path: string): string | null {
 function detectProjectLogo(root: string) {
   for (const relativePath of LOGO_CANDIDATES) {
     const full = join(root, relativePath);
-    if (!existsSync(full)) continue;
-    const stat = statSync(full);
+    if (!existsSync(full) || realpathSync(full) !== full) continue;
+    const stat = lstatSync(full);
     const contentType = logoContentType(relativePath);
     if (!stat.isFile() || !contentType || stat.size === 0 || stat.size > 256 * 1024) continue;
     return { contentType, data: readB64(full), sourcePath: relativePath };
@@ -146,10 +155,27 @@ function detectProjectLogo(root: string) {
 async function syncFiles(cfg: Config, projectId: string, files: string[], deletes: string[]) {
   if (!files.length && !deletes.length) return;
   const root = process.cwd();
+  const payload = files.flatMap((file) => {
+    const path = toRel(root, file);
+    if (file === CONFIG_FILE || (CONFIG_DIR !== root && file.startsWith(CONFIG_DIR + sep))) return [];
+    if (path.split('/').some(excludedFromSync) || path.startsWith('../')) return [];
+    let content: string;
+    try {
+      if (realpathSync(file) !== file) return [];
+      const stat = lstatSync(file);
+      if (!stat.isFile() || stat.size > MAX_FILE) return [];
+      content = readB64(file);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw error;
+    }
+    return [{ path, content }];
+  });
+  if (!payload.length && !deletes.length) return;
   await apiCall(cfg, `/v1/projects/${projectId}/sync`, {
     method: 'POST',
     body: {
-      files: files.map((f) => ({ path: toRel(root, f), content: readB64(f) })),
+      files: payload,
       deletes,
     },
   });
@@ -159,30 +185,43 @@ async function syncFiles(cfg: Config, projectId: string, files: string[], delete
 function saveSession(cfg:Config){
   mkdirSync(CONFIG_DIR,{recursive:true,mode:0o700});
   chmodSync(CONFIG_DIR,0o700);
-  writeFileSync(CONFIG_FILE,JSON.stringify(cfg,null,2),{mode:0o600});
-  chmodSync(CONFIG_FILE,0o600);
+  const temporary = join(CONFIG_DIR, `session-${randomUUID()}.tmp`);
+  try {
+    writeFileSync(temporary, JSON.stringify(cfg, null, 2), { flag: 'wx', mode: 0o600 });
+    renameSync(temporary, CONFIG_FILE);
+  } finally {
+    if (existsSync(temporary)) unlinkSync(temporary);
+  }
+}
+function safeWebUrl(value: string): URL {
+  const url = new URL(value);
+  const localHttp = url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
+  if (url.username || url.password || (url.protocol !== 'https:' && !localHttp)) {
+    throw new Error('Use an HTTPS URL or HTTP on localhost.');
+  }
+  return url;
 }
 function openBrowser(url:string){
   const command=process.platform==='darwin'?'open':process.platform==='win32'?'explorer.exe':'xdg-open';
-  const child=spawn(command,[url],{stdio:'ignore',detached:true});
+  const child=spawn(command,[safeWebUrl(url).href],{stdio:'ignore',detached:true});
   child.on('error',()=>{});child.unref();
 }
 async function cmdLogin(apiKey?:string,apiUrl?:string,noBrowser=false){
   const base=(apiUrl??process.env.EVEROCK_API_URL??readConfig()?.apiUrl??'http://localhost:4000').replace(/\/$/,'');
-  const url=new URL(base);
-  if(url.protocol!=='https:'&&!['localhost','127.0.0.1','[::1]'].includes(url.hostname))die('Use HTTPS for remote authentication.');
+  safeWebUrl(base);
   if(apiKey){
     const cfg={apiKey,apiUrl:base};await apiCall(cfg,'/v1/projects');saveSession(cfg);log('✓ Signed in');return;
   }
-  const start=await fetch(`${base}/auth/cli/start`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({clientName:'Everock CLI'}),signal:AbortSignal.timeout(15000)});
+  const start=await fetch(`${base}/auth/cli/start`,{redirect:'error',method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({clientName:'Everock CLI'}),signal:AbortSignal.timeout(15000)});
   if(!start.ok)die(`Unable to start login (${start.status})`);
   const flow=await start.json() as {deviceCode:string;userCode:string;verificationUrl:string;expiresIn:number;interval:number};
+  safeWebUrl(flow.verificationUrl);
   log(`Open ${flow.verificationUrl}\nEnter code: ${flow.userCode}\nApprove this CLI once, then return to your agent.`);
   if(!noBrowser)openBrowser(flow.verificationUrl);
   const deadline=Date.now()+flow.expiresIn*1000;let interval=flow.interval*1000;
   while(Date.now()<deadline){
     await new Promise(resolve=>setTimeout(resolve,interval));
-    const res=await fetch(`${base}/auth/cli/token`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({deviceCode:flow.deviceCode}),signal:AbortSignal.timeout(15000)});
+    const res=await fetch(`${base}/auth/cli/token`,{redirect:'error',method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({deviceCode:flow.deviceCode}),signal:AbortSignal.timeout(15000)});
     const result=await res.json() as {apiKey?:string;error?:string};
     if(res.ok&&result.apiKey){saveSession({apiKey:result.apiKey,apiUrl:base});log('✓ Signed in. Your agent can now use the CLI and local MCP.');return;}
     if(result.error==='authorization_pending')continue;
@@ -191,8 +230,13 @@ async function cmdLogin(apiKey?:string,apiUrl?:string,noBrowser=false){
   }
   die('Login expired. Run everock login again.');
 }
-async function cmdLogout(){
+async function cmdLogout(localOnly: boolean){
  const cfg=readConfig();if(!cfg){log('Already signed out');return;}
+ if (localOnly) {
+   unlinkSync(CONFIG_FILE);
+   log('Local credentials removed. Remote revocation was not requested.');
+   return;
+ }
  await apiCall(cfg,'/v1/auth/session',{method:'DELETE'});
  unlinkSync(CONFIG_FILE);log('✓ Session revoked and removed');
 }
@@ -233,7 +277,14 @@ async function cmdLink(projectId?: string, component = 'main', localOnly = false
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(component) || component.length > 48) die('Identificador de componente inválido.');
   const available = await apiCall<{components: {slug:string}[]}>(cfg!, `/v1/projects/${projectId}/components`);
   if (!available.components.some(item => item.slug === component)) await apiCall(cfg!,`/v1/projects/${projectId}/components`,{method:'POST',body:{slug:component,name:component,kind:'other',defaultBranch:'main',workingDirectory:''}});
-  writeFileSync(LINK_FILE, JSON.stringify({ projectId, component }, null, 2));
+  const temporaryLink = LINK_FILE + '.' + randomUUID() + '.tmp';
+  writeFileSync(temporaryLink, JSON.stringify({ projectId, component }, null, 2), { flag: 'wx' });
+  try {
+    renameSync(temporaryLink, LINK_FILE);
+  } catch (error) {
+    unlinkSync(temporaryLink);
+    throw error;
+  }
   log(`✓ Enlazado a "${project.slug}" · escrito ${LINK_FILE}`);
 
   try {
@@ -305,7 +356,8 @@ async function cmdDev() {
 
   const watcher = chokidar.watch(root, {
     ignoreInitial: true,
-    ignored: (p: string) => p.split(sep).some((seg) => IGNORE.has(seg)),
+    followSymlinks: false,
+    ignored: (p: string) => relative(root, p).split(sep).some(excludedFromSync),
   });
   watcher
     .on('add', (p) => {
@@ -419,7 +471,7 @@ async function main() {
   switch (cmd) {
     case 'login':
       return cmdLogin(values['api-key'], values['api-url'],Boolean(values['no-browser']));
-    case 'logout': return cmdLogout();
+    case 'logout': return cmdLogout(Boolean(values['local-only']));
     case 'whoami': {const cfg=readConfig();if(!cfg)die('Run everock login first.');log(JSON.stringify(await apiCall(cfg!,'/v1/auth/session')));return;}
     case 'github': return cmdGithub(Boolean(values['no-browser']));
     case 'projects': return cmdProjects(positionals[1]==='create'?values.name:undefined);
@@ -444,7 +496,7 @@ async function main() {
           'Everock CLI',
           '',
           '  everock login [--api-url URL] [--no-browser]',
-          '  everock logout | whoami',
+          '  everock logout [--local-only] | whoami',
           '  everock github connect',
           '  everock projects [create --name "My app"]',
           '  everock init --name "My app" [--component api]',
