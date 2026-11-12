@@ -1,19 +1,7 @@
 /**
- * Everock MCP tool registry shared by the local stdio and remote HTTP
- * transports.
- *
- * Runs on the developer's machine next to their coding agent (Claude Code,
- * Codex, Cursor, …). It exposes the Everock platform as tools so the local
- * agent can monitor a cloud project in real time and act on it — read logs,
- * metrics and deployments, then restart / roll back / (un)publish — without
- * leaving the chat.
- *
- * Auth:
- * - stdio uses a personal API key (ak_…)
- * - remote HTTP receives a validated OAuth identity through MCP AuthInfo
- *
- *   env EVEROCK_API_KEY   required, "ak_…"
- *   env EVEROCK_API_URL   defaults to http://localhost:4000
+ * Everock tools for reading project telemetry and tracking incident repairs.
+ * Local stdio uses the developer's credentials. Remote HTTP uses the
+ * authenticated caller's OAuth identity.
  */
 import { serviceUrl } from './service-url.js';
 import {readFileSync} from 'node:fs';
@@ -237,13 +225,6 @@ server.tool(
 );
 
 server.tool(
-  'get_stats',
-  'Live container stats for a project: running, cpu %, memory used/limit, restart count.',
-  { ...pid },
-  tool(async ({ projectId }) => ok(await call(`/v1/projects/${projectId}/stats`))),
-);
-
-server.tool(
   'get_deployments',
   'Deployment history for a project (version sha, message, kind, status, date).',
   { ...pid },
@@ -346,19 +327,8 @@ server.tool(
 );
 
 server.tool(
-  'get_env',
-  'List environment variable names configured for this project.',
-  { ...pid },
-  tool(async ({ projectId }) => {
-    const result = await call<{ vars: { key: string }[] }>(`/v1/projects/${projectId}/env?only=keys`);
-    return ok({ vars: result.vars.map(({ key }) => ({ key })) });
-  }),
-);
-
-// ── act: safe write path ──
-server.tool(
   'propose_change',
-  'THE safe way to change production code. Submit a set of files (full content, or null to delete); the platform audits the proposal (protected paths, secrets, size), snapshots the app, applies, verifies (build), and AUTOMATICALLY ROLLS BACK if verification fails. Every step lands in the immutable change ledger. Returns the proposal with its status.',
+  'Record a proposed patch for review and incident history. Apply and test the fix in the user repository, then report the outcome.',
   {
     ...pid,
     title: z.string().min(3).max(200).describe('Short imperative summary of the change.'),
@@ -375,7 +345,7 @@ server.tool(
     requireApproval: z
       .boolean()
       .optional()
-      .describe('true → wait for the owner to approve in the panel instead of auto-applying.'),
+      .describe('true → wait for the owner to approve in the panel before approval is recorded.'),
     incidentId: z
       .string()
       .uuid()
@@ -419,7 +389,7 @@ server.tool(
 
 server.tool(
   'get_proposals',
-  'Change proposals for a project with status (pending/approved/applying/applied/failed/rejected), audit findings, and result shas. Check this after propose_change to see if the change applied or was rolled back.',
+  'Change proposals for a project with status (pending/approved/applying/applied/failed/rejected), audit findings, and result shas.',
   { ...pid },
   tool(async ({ projectId }) => ok(await call(`/v1/projects/${projectId}/proposals`))),
 );
@@ -429,43 +399,6 @@ server.tool(
   'The immutable change ledger for a project: every proposal transition (proposed/approved/applied/rolled_back) with actor, sha, and evidence. The audit trail of everything agents did to production.',
   { ...pid },
   tool(async ({ projectId }) => ok(await call(`/v1/projects/${projectId}/ledger`))),
-);
-
-// ── act ──
-server.tool(
-  'restart_project',
-  'Restart a project container (applies new env vars / recovers from a crash).',
-  { ...pid },
-  tool(async ({ projectId }) =>
-    ok(await call(`/v1/projects/${projectId}/restart`, { method: 'POST' })),
-  ),
-);
-
-server.tool(
-  'rollback_deployment',
-  'Roll a project back to a previous deployment by its sha (creates a new version).',
-  { ...pid, sha: z.string().describe('The deployment sha to restore (from get_deployments).') },
-  tool(async ({ projectId, sha }) =>
-    ok(await call(`/v1/projects/${projectId}/rollback`, { method: 'POST', body: { sha } })),
-  ),
-);
-
-server.tool(
-  'publish_project',
-  'Publish a project (dev → prod: build the app and serve the built output).',
-  { ...pid },
-  tool(async ({ projectId }) =>
-    ok(await call(`/v1/projects/${projectId}/publish`, { method: 'POST' })),
-  ),
-);
-
-server.tool(
-  'unpublish_project',
-  'Unpublish a project (prod → dev: back to the live hot-reload dev server).',
-  { ...pid },
-  tool(async ({ projectId }) =>
-    ok(await call(`/v1/projects/${projectId}/unpublish`, { method: 'POST' })),
-  ),
 );
 
 return server;
