@@ -1,0 +1,32 @@
+name: Public SDK packages
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  packages:
+    name: Verify published package formats
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '22'
+      - run: corepack pnpm install --frozen-lockfile
+      - run: corepack pnpm run build
+      - run: corepack pnpm test
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Test installed Python wheel
+        run: |
+          python -m pip wheel --no-deps ./packages/python --wheel-dir dist/python
+          wheels=(dist/python/*.whl)
+          test "${#wheels[@]}" -eq 1
+          python -m pip install "${wheels[0]}[fastapi,flask,django,httpx,requests,test]"
+          python -m pytest -q packages/python/tests
