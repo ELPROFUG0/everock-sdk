@@ -21,6 +21,7 @@ import { homedir } from 'node:os';
 import { join, relative, resolve, sep } from 'node:path';
 import { parseArgs } from 'node:util';
 import chokidar from 'chokidar';
+import { pollDeviceToken } from './device-poll.js';
 import { ignoredSyncPaths, privateSyncName } from './sync-policy.js';
 
 // ─── config (global key) + link (per-project, in cwd) ───
@@ -224,17 +225,14 @@ async function cmdLogin(apiKey?:string,apiUrl?:string,noBrowser=false){
   safeWebUrl(flow.verificationUrl);
   log(`Open ${flow.verificationUrl}\nEnter code: ${flow.userCode}\nApprove this CLI once, then return to your agent.`);
   if(!noBrowser)openBrowser(flow.verificationUrl);
-  const deadline=Date.now()+flow.expiresIn*1000;let interval=flow.interval*1000;
-  while(Date.now()<deadline){
-    await new Promise(resolve=>setTimeout(resolve,interval));
-    const res=await fetch(`${base}/auth/cli/token`,{redirect:'error',method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({deviceCode:flow.deviceCode}),signal:AbortSignal.timeout(15000)});
-    const result=await res.json() as {apiKey?:string;error?:string};
-    if(res.ok&&result.apiKey){saveSession({apiKey:result.apiKey,apiUrl:base});log('✓ Signed in. Your agent can now use the CLI and local MCP.');return;}
-    if(result.error==='authorization_pending')continue;
-    if(result.error==='slow_down'){interval+=1000;continue;}
-    die(result.error??'Login failed');
-  }
-  die('Login expired. Run everock login again.');
+  const token = await pollDeviceToken(flow.expiresIn, flow.interval, timeoutMs =>
+    fetch(`${base}/auth/cli/token`, {
+      method: 'POST', redirect: 'error', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ deviceCode: flow.deviceCode }), signal: AbortSignal.timeout(timeoutMs),
+    }),
+  );
+  saveSession({ apiKey: token, apiUrl: base });
+  log('✓ Signed in. Your agent can now use the CLI and local MCP.');
 }
 async function cmdLogout(localOnly: boolean){
  const cfg=readConfig();if(!cfg){log('Already signed out');return;}
