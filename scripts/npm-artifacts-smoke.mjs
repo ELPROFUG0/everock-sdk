@@ -28,6 +28,7 @@ try {
     }
   }
   execFileSync('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', ...archives, 'express@5', 'hono@4'], { cwd: temporary, stdio: 'pipe' });
+  execFileSync('npm', ['audit', '--omit=dev', '--audit-level=high'], { cwd: temporary, stdio: 'inherit' });
   await writeFile(join(temporary, 'smoke.mjs'), `
     import assert from 'node:assert/strict';
     import * as nodeSdk from '@everock/sdk/node';
