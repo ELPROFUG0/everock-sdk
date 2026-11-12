@@ -14,7 +14,8 @@
     "start:http": "tsx src/http.ts",
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit false --declaration false --rootDir src --outDir dist",
-    "prepack": "npm run build"
+    "prepack": "npm run build",
+    "test": "tsx --test test/*.test.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",

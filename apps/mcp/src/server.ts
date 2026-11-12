@@ -15,6 +15,7 @@
  *   env EVEROCK_API_KEY   required, "ak_…"
  *   env EVEROCK_API_URL   defaults to http://localhost:4000
  */
+import { serviceUrl } from './service-url.js';
 import {readFileSync} from 'node:fs';
 import {homedir} from 'node:os';
 import {join} from 'node:path';
@@ -26,7 +27,10 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { z } from 'zod';
 
 function cliSession():{apiKey?:string;apiUrl?:string}{try{return JSON.parse(readFileSync(join(process.env.EVEROCK_CONFIG_DIR??join(homedir(),'.everock'),'config.json'),'utf8'));}catch{return {};}}
-export const apiOrigin=()=> (process.env.EVEROCK_API_URL ?? cliSession().apiUrl ?? 'http://localhost:4000').replace(/\/$/, '');
+const localDefault = 'http://localhost:4000';
+export const apiOrigin = () => serviceUrl(process.env.EVEROCK_API_URL
+  ?? (requestIdentity.getStore()?.email ? undefined : cliSession().apiUrl)
+  ?? localDefault);
 const API_KEY = process.env.EVEROCK_API_KEY ?? '';
 const API_TOKEN = process.env.EVEROCK_API_TOKEN ?? '';
 type AgentKind = 'codex' | 'claude';
@@ -48,7 +52,15 @@ const fail = (msg: string): ToolResult => ({
 
 async function call<T>(path: string, init?: { method?: string; body?: unknown }): Promise<T> {
   const email = requestIdentity.getStore()?.email;
-  const bearer = email ? API_TOKEN : API_KEY || cliSession().apiKey;
+  const session = email ? undefined : cliSession();
+  const origin = serviceUrl(process.env.EVEROCK_API_URL ?? session?.apiUrl ?? localDefault);
+  const bearer = email ? API_TOKEN : API_KEY || session?.apiKey;
+  if (!email && !API_KEY && bearer) {
+    if (!session?.apiUrl || serviceUrl(session.apiUrl) !== origin) {
+      throw new Error('The CLI session belongs to another API. Sign in to the selected API or set its EVEROCK_API_KEY.');
+    }
+
+  }
   if (!bearer) {
     throw new Error(
       email
@@ -56,7 +68,8 @@ async function call<T>(path: string, init?: { method?: string; body?: unknown })
         : 'Run everock login first, or set EVEROCK_API_KEY for CI.',
     );
   }
-  const res = await fetch(`${apiOrigin()}${path}`, {
+  const res = await fetch(`${origin}${path}`, {
+    redirect: 'error',
     method: init?.method ?? 'GET',
     headers: {
       authorization: `Bearer ${bearer}`,
@@ -130,12 +143,16 @@ async function updateIncidentProgress(
   });
 }
 
+export function createServer(transport: 'stdio' | 'http' = 'stdio') {
 /** Wrap a handler so thrown errors become MCP error results, not crashes. */
 const tool =
   (fn: (args: any) => Promise<ToolResult>) =>
   async (args: any, extra?: { authInfo?: AuthInfo }): Promise<ToolResult> => {
     const email =
-      typeof extra?.authInfo?.extra?.email === 'string' ? extra.authInfo.extra.email : undefined;
+      transport === 'http' && typeof extra?.authInfo?.extra?.email === 'string'
+        ? extra.authInfo.extra.email.trim()
+        : undefined;
+    if (transport === 'http' && !email) return fail('OAuth user identity required.');
     const rawAgentKind = extra?.authInfo?.extra?.agentKind;
     const agentKind =
       rawAgentKind === 'codex' || rawAgentKind === 'claude' ? rawAgentKind : envAgentKind;
@@ -150,7 +167,6 @@ const tool =
 
 const pid = { projectId: z.string().uuid().describe('The project id (from list_projects).') };
 
-export function createServer() {
 const server = new McpServer({ name: 'everock', version: '0.1.0' });
 
 // ── read: discovery ──
@@ -331,9 +347,12 @@ server.tool(
 
 server.tool(
   'get_env',
-  'Environment variables for a project (decrypted values — the owner is asking).',
+  'List environment variable names configured for this project.',
   { ...pid },
-  tool(async ({ projectId }) => ok(await call(`/v1/projects/${projectId}/env`))),
+  tool(async ({ projectId }) => {
+    const result = await call<{ vars: { key: string }[] }>(`/v1/projects/${projectId}/env?only=keys`);
+    return ok({ vars: result.vars.map(({ key }) => ({ key })) });
+  }),
 );
 
 // ── act: safe write path ──
