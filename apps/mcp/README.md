@@ -1,5 +1,7 @@
 # Application onboarding over MCP
 
+For local installation and browser sign-in, follow the [CLI build instructions](../cli/README.md#install-from-the-public-source).
+
 ## Advanced detection and monitor preferences
 
 The authenticated agent can use the same advanced settings as the dashboard:
@@ -83,9 +85,7 @@ The stdio server continues to use the existing personal API key authentication.
 
 ## Validation
 
-Run `pnpm --filter @everock/mcp test` with the local database, Redis and root
-environment configured. The integration test exercises tools through the MCP
-protocol against the real API and isolated database fixtures.
+Run `pnpm --filter @everock/mcp test` from this repository. The tests use isolated local fixtures to verify session identity, destination binding and tool discovery.
 
 Local activation binds each installation to its Everock account through
 `GITHUB_INSTALLATION_OWNERS` (a JSON object of installation ID to email).
@@ -99,8 +99,8 @@ installation lists to arbitrary accounts.
 Run `everock login` once. The local stdio MCP automatically reads the resulting
 session from `~/.everock/config.json`; no API key needs to be copied into the
 agent configuration. `EVEROCK_API_KEY` remains an explicit override for CI.
-`everock logout` revokes this session. See
-[agent onboarding](../../docs/agent-cli-onboarding.md) for GitHub authorization,
+`everock logout` revokes this session. See the
+[CLI guide](../cli/README.md) for GitHub authorization,
 project creation, local commands and deployment requirements.
 
 `get_telemetry_usage` reads the owner account monthly accepted-event/byte/replay counters, protective quotas and UTC reset time. It aggregates projects and cannot change prices, billing or limits.
