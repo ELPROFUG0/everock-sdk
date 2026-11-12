@@ -15,9 +15,6 @@
     "prepack": "npm run build",
     "test": "npm run build && node --test test/*.test.mjs"
   },
-  "dependencies": {
-    "chokidar": "^4.0.3"
-  },
   "devDependencies": {
     "@types/node": "^22.10.2",
     "tsx": "^4.19.2",

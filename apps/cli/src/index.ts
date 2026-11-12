@@ -1,28 +1,12 @@
 #!/usr/bin/env node
 import {detectFramework} from './detect-framework.js';
-/**
- * Everock CLI — runs on the developer's machine.
- *
- *   everock login  --api-key ak_…   [--api-url http://localhost:4000]
- *   everock link   --project-id <uuid>
- *   everock dev                      # watch cwd, sync every save → hot reload in the cloud
- *   everock push                     # one-shot full sync
- *   everock logs   [--errors]        # recent request logs
- *   everock deploy                   # publish (dev → prod)
- *   everock rollback --sha <sha>
- *
- * Auth is a personal API key (see the "Conectar" modal). The linked project id
- * lives in ./.everock.json so `dev` knows what to sync.
- */
-import { mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync, statSync, lstatSync, realpathSync, renameSync, chmodSync, unlinkSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, existsSync, statSync, lstatSync, realpathSync, renameSync, chmodSync, unlinkSync } from 'node:fs';
 import { execFileSync, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join, relative, resolve, sep } from 'node:path';
 import { parseArgs } from 'node:util';
-import chokidar from 'chokidar';
 import { pollDeviceToken } from './device-poll.js';
-import { ignoredSyncPaths, privateSyncName } from './sync-policy.js';
 
 // ─── config (global key) + link (per-project, in cwd) ───
 const CONFIG_DIR = resolve(process.env.EVEROCK_CONFIG_DIR ?? join(homedir(), '.everock'));
@@ -40,7 +24,7 @@ const readLink = (): { projectId: string; component?: string } | null =>
 
 function requireCtx(): { cfg: Config; projectId: string; component: string } {
   const cfg = readConfig();
-  if (!cfg?.apiKey) die('No has iniciado sesión. Corre:  everock login --api-key ak_…');
+  if (!cfg?.apiKey) die('No has iniciado sesión. Corre:  everock login');
   const link = readLink();
   if (!link?.projectId) die('Proyecto no enlazado. Corre:  everock link --project-id <id>');
   return { cfg: cfg!, projectId: link!.projectId, component: link!.component ?? 'main' };
@@ -74,41 +58,6 @@ async function apiCall<T>(
   return data as T;
 }
 
-// ─── file collection (respecting a minimal ignore set) ───
-const IGNORE = new Set([
-  'node_modules',
-  '.git',
-  '.next',
-  'dist',
-  'build',
-  'coverage',
-  '.turbo',
-  '.everock',
-  '.everock.json',
-  // Protect credentials left by older local installations as well.
-  '.agenthost',
-  '.agenthost.json',
-  '.DS_Store',
-]);
-const MAX_FILE = 10 * 1024 * 1024; // 10 MB per file
-
-function excludedFromSync(name: string): boolean {
-  return IGNORE.has(name) || privateSyncName(name);
-}
-
-function walk(root: string, dir = root, out: string[] = []): string[] {
-  for (const name of readdirSync(dir)) {
-    if (excludedFromSync(name)) continue;
-    const full = join(dir, name);
-    const st = lstatSync(full);
-    if (full === CONFIG_FILE || (full === CONFIG_DIR && full !== root)) continue;
-    if (st.isDirectory()) walk(root, full, out);
-    else if (st.isFile() && st.size <= MAX_FILE) out.push(full);
-  }
-  return out;
-}
-
-const toRel = (root: string, full: string) => relative(root, full).split(sep).join('/');
 const readB64 = (full: string) => readFileSync(full).toString('base64');
 
 const LOGO_CANDIDATES = [
@@ -153,41 +102,6 @@ function detectProjectLogo(root: string) {
   return null;
 }
 
-async function syncFiles(cfg: Config, projectId: string, files: string[], deletes: string[]) {
-  if (!files.length && !deletes.length) return;
-  const root = process.cwd();
-  const ignored = ignoredSyncPaths(root, [...files.map(file => toRel(root, file)), ...deletes]);
-  const eligible = (path: string) => {
-    const full = resolve(root, path);
-    return full !== CONFIG_FILE && !(CONFIG_DIR !== root && full.startsWith(CONFIG_DIR + sep)) &&
-      !ignored.has(path) && !path.split('/').some(excludedFromSync) && !path.startsWith('../');
-  };
-  const publicDeletes = deletes.filter(eligible);
-  const payload = files.flatMap((file) => {
-    const path = toRel(root, file);
-    if (!eligible(path)) return [];
-    let content: string;
-    try {
-      if (realpathSync(file) !== file) return [];
-      const stat = lstatSync(file);
-      if (!stat.isFile() || stat.size > MAX_FILE) return [];
-      content = readB64(file);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
-      throw error;
-    }
-    return [{ path, content }];
-  });
-  if (!payload.length && !publicDeletes.length) return;
-  await apiCall(cfg, `/v1/projects/${projectId}/sync`, {
-    method: 'POST',
-    body: {
-      files: payload,
-      deletes: publicDeletes,
-    },
-  });
-}
-
 // ─── commands ───
 function saveSession(cfg:Config){
   mkdirSync(CONFIG_DIR,{recursive:true,mode:0o700});
@@ -214,7 +128,7 @@ function openBrowser(url:string){
   child.on('error',()=>{});child.unref();
 }
 async function cmdLogin(apiKey?:string,apiUrl?:string,noBrowser=false){
-  const base=(apiUrl??process.env.EVEROCK_API_URL??readConfig()?.apiUrl??'http://localhost:4000').replace(/\/$/,'');
+  const base=(apiUrl??process.env.EVEROCK_API_URL??readConfig()?.apiUrl??(apiKey ? 'http://localhost:4000' : 'https://api.everock.dev')).replace(/\/$/,'');
   safeWebUrl(base);
   if(apiKey){
     const cfg={apiKey,apiUrl:base};await apiCall(cfg,'/v1/projects');saveSession(cfg);log('✓ Signed in');return;
@@ -274,7 +188,7 @@ async function cmdInit(name?:string,projectId?:string,component='main'){
 async function cmdLink(projectId?: string, component = 'main', localOnly = false) {
   if (!projectId) die('Falta --project-id <uuid>');
   const cfg = readConfig();
-  if (!cfg?.apiKey) die('Inicia sesión primero:  everock login --api-key ak_…');
+  if (!cfg?.apiKey) die('Inicia sesión primero:  everock login');
   const project = await apiCall<{ slug: string }>(cfg!, `/v1/projects/${projectId}`).catch(() =>
     die('Proyecto no encontrado (¿es tuyo?).'),
   );
@@ -322,71 +236,6 @@ async function cmdLink(projectId?: string, component = 'main', localOnly = false
   log('✓ Checkout vinculado sin subir archivos locales.');
 }
 
-async function cmdPush() {
-  const { cfg, projectId, component } = requireCtx();
-  if (component !== 'main') die('Los comandos de hosting administrado solo admiten main. Despliega este componente con tu proveedor y configura su SDK.');
-  const files = walk(process.cwd());
-  log(`Subiendo ${files.length} archivos…`);
-  await syncFiles(cfg, projectId, files, []);
-  log('✓ Sincronizado.');
-}
-
-async function cmdDev() {
-  const { cfg, projectId, component } = requireCtx();
-  if (component !== 'main') die('Los comandos de hosting administrado solo admiten main. Despliega este componente con tu proveedor y configura su SDK.');
-  const root = process.cwd();
-  log('↑ Subida inicial…');
-  await cmdPushSilent(cfg, projectId);
-  log('✓ Listo. Observando cambios (Ctrl-C para salir).');
-
-  // Coalesce rapid saves into one batched sync.
-  const changed = new Set<string>();
-  const removed = new Set<string>();
-  let timer: NodeJS.Timeout | null = null;
-  const flush = () => {
-    timer = null;
-    const files = [...changed];
-    const dels = [...removed];
-    changed.clear();
-    removed.clear();
-    syncFiles(cfg, projectId, files, dels)
-      .then(() => log(`⟳ sync · ${files.length} cambios${dels.length ? `, ${dels.length} borrados` : ''}`))
-      .catch((e) => console.error(`✗ sync: ${e.message}`));
-  };
-  const schedule = () => {
-    if (timer) clearTimeout(timer);
-    timer = setTimeout(flush, 150);
-  };
-
-  const watcher = chokidar.watch(root, {
-    ignoreInitial: true,
-    followSymlinks: false,
-    ignored: (p: string) => relative(root, p).split(sep).some(excludedFromSync),
-  });
-  watcher
-    .on('add', (p) => {
-      removed.delete(toRel(root, p));
-      changed.add(p);
-      schedule();
-    })
-    .on('change', (p) => {
-      changed.add(p);
-      schedule();
-    })
-    .on('unlink', (p) => {
-      const rel = toRel(root, p);
-      changed.forEach((f) => {
-        if (toRel(root, f) === rel) changed.delete(f);
-      });
-      removed.add(rel);
-      schedule();
-    });
-}
-
-async function cmdPushSilent(cfg: Config, projectId: string) {
-  await syncFiles(cfg, projectId, walk(process.cwd()), []);
-}
-
 async function cmdLogs(errors: boolean) {
   const { cfg, projectId } = requireCtx();
   const p = new URLSearchParams({ projectId });
@@ -399,21 +248,6 @@ async function cmdLogs(errors: boolean) {
   for (const l of logs) {
     log(`${new Date(l.ts).toLocaleTimeString('es-MX', { hour12: false })}  ${l.method} ${l.status}  ${l.path}  ${l.latencyMs}ms`);
   }
-}
-
-async function cmdDeploy() {
-  const { cfg, projectId, component } = requireCtx();
-  if (component !== 'main') die('Los comandos de hosting administrado solo admiten main. Despliega este componente con tu proveedor y configura su SDK.');
-  await apiCall(cfg, `/v1/projects/${projectId}/publish`, { method: 'POST' });
-  log('✓ Publicado (prod).');
-}
-
-async function cmdRollback(sha?: string) {
-  if (!sha) die('Falta --sha <sha>');
-  const { cfg, projectId, component } = requireCtx();
-  if (component !== 'main') die('Los comandos de hosting administrado solo admiten main. Despliega este componente con tu proveedor y configura su SDK.');
-  await apiCall(cfg, `/v1/projects/${projectId}/rollback`, { method: 'POST', body: { sha } });
-  log(`✓ Revertido a ${sha}.`);
 }
 
 async function cmdScan(file?: string, mode?: string, selectedComponent?: string) {
@@ -462,6 +296,7 @@ async function main() {
       name: {type:'string'},
       'local-only': { type: 'boolean' },
       'api-key': { type: 'string' },
+      'api-key-stdin': { type: 'boolean' },
       'api-url': { type: 'string' },
       'project-id': { type: 'string' },
       sha: { type: 'string' },
@@ -474,6 +309,19 @@ async function main() {
   const cmd = values.help?'help':positionals[0];
   switch (cmd) {
     case 'login':
+      if (values['api-key-stdin']) {
+        if (values['api-key'] !== undefined || process.stdin.isTTY) {
+          die('Pipe one API key to --api-key-stdin, or run everock login for browser sign-in.');
+        }
+        let key = '';
+        for await (const chunk of process.stdin) {
+          key += chunk.toString();
+          if (key.length > 512) die('Invalid API key on stdin.');
+        }
+        key = key.trim();
+        if (!/^ak_[A-Za-z0-9_-]{43}$/.test(key)) die('Invalid API key on stdin.');
+        return cmdLogin(key, values['api-url']);
+      }
       return cmdLogin(values['api-key'], values['api-url'],Boolean(values['no-browser']));
     case 'logout': return cmdLogout(Boolean(values['local-only']));
     case 'whoami': {const cfg=readConfig();if(!cfg)die('Run everock login first.');log(JSON.stringify(await apiCall(cfg!,'/v1/auth/session')));return;}
@@ -482,34 +330,24 @@ async function main() {
     case 'init': return cmdInit(values.name,values['project-id'],values.component);
     case 'link':
       return cmdLink(values['project-id'], values.component, Boolean(values['local-only']));
-    case 'dev':
-      return cmdDev();
-    case 'push':
-      return cmdPush();
     case 'logs':
       return cmdLogs(Boolean(values.errors));
-    case 'deploy':
-      return cmdDeploy();
-    case 'rollback':
-      return cmdRollback(values.sha);
     case 'scan':
       return cmdScan(values.file, values.mode, values.component);
     default:
+      if (cmd && cmd !== 'help') die('Unknown command. Run everock --help.');
       log(
         [
           'Everock CLI',
           '',
           '  everock login [--api-url URL] [--no-browser]',
+          '  everock login --api-key-stdin --api-url URL',
           '  everock logout [--local-only] | whoami',
           '  everock github connect',
           '  everock projects [create --name "My app"]',
           '  everock init --name "My app" [--component api]',
           '  everock link --project-id <uuid> [--component api] [--local-only]',
-          '  everock dev        # watch + sync en caliente',
-          '  everock push       # sync único',
           '  everock logs [--errors]',
-          '  everock deploy',
-          '  everock rollback --sha <sha>',
           '  everock scan       # valida y publica .everock/codebase-scan.json',
           '  everock scan --file .everock/codebase-scan.json',
           '  everock scan --mode foglamp --file .everock/foglamp-scan.json',
