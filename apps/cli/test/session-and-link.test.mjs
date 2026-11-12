@@ -12,7 +12,7 @@ import { promisify } from 'node:util';
 const run = promisify(execFile);
 const entry = fileURLToPath(new URL('../dist/index.js', import.meta.url));
 
-test('built CLI keeps credentials private, excludes local configuration from push, and revokes on logout', async t => {
+test('built CLI keeps credentials private, links GitHub repositories using metadata, and revokes on logout', async t => {
   const cwd = await realpath(await mkdtemp(join(tmpdir(), 'everock-cli-')));
   t.after(() => rm(cwd, { recursive: true, force: true }));
   const configDir = join(cwd, 'local-session');
@@ -25,7 +25,7 @@ test('built CLI keeps credentials private, excludes local configuration from pus
     for await (const chunk of req) chunks.push(chunk);
     calls.push({ path: req.url, method: req.method, body: Buffer.concat(chunks).toString() });
     res.writeHead(req.method === 'DELETE' ? revokeStatus : 200);
-    res.end('{}');
+    res.end(req.url.endsWith('/components') ? JSON.stringify({components:[{slug:'main'}]}) : '{}');
   });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
@@ -34,13 +34,16 @@ test('built CLI keeps credentials private, excludes local configuration from pus
   const config = join(configDir, 'config.json');
   await cli('login', '--api-key', 'fixture', '--api-url', base);
   if (process.platform !== 'win32') assert.equal((await stat(config)).mode & 0o777, 0o600);
-  await writeFile(join(cwd, '.everock.json'), JSON.stringify({ projectId: 'fixture' }));
-  for (const name of ['.env', '.env.production', '.npmrc', 'private.pem', 'index.js']) {
-    await writeFile(join(cwd, name), 'fixture');
-  }
-  await cli('push');
-  const sync = calls.find(call => call.path === '/v1/projects/fixture/sync');
-  assert.deepEqual(JSON.parse(sync.body).files.map(file => file.path), ['index.js']);
+  await run('git', ['init','-b','main'], {cwd});
+  await run('git', ['remote','add','origin','https://github.com/example/store.git'], {cwd});
+  await writeFile(join(cwd,'checkout.js'), 'fixture-source-marker');
+  await cli('link','--project-id','fixture');
+  const link = calls.find(call => call.method === 'PATCH');
+  assert.deepEqual(JSON.parse(link.body), {repo:'example/store',defaultBranch:'main',workingDirectory:''});
+  assert.ok(!JSON.stringify(calls).includes('fixture-source-marker'));
+  const before = calls.length;
+  for (const legacy of ['dev','push','deploy','rollback']) await assert.rejects(cli(legacy), /Unknown command/);
+  assert.equal(calls.length,before);
   await assert.rejects(cli('logout'));
   assert.equal(JSON.parse(await readFile(config, 'utf8')).apiKey, 'fixture');
   revokeStatus = 200;
