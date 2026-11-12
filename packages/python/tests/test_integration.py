@@ -14,6 +14,7 @@ def collector():
     state = {'status': 200}
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
+            state['user_agent'] = self.headers.get('User-Agent')
             batches.append(json.loads(self.rfile.read(int(self.headers['Content-Length']))))
             self.send_response(state['status']); self.end_headers(); self.wfile.write(b'{}')
         def log_message(self, *args):
@@ -37,7 +38,7 @@ def test_fastapi_routes_errors_and_context(collector):
     from fastapi import FastAPI
     import asyncio
     import httpx
-    endpoint, batches, _ = collector
+    endpoint, batches, state = collector
     telemetry = setup(endpoint)
     app = FastAPI()
     @app.get('/orders/{order_id}')
@@ -55,6 +56,7 @@ def test_fastapi_routes_errors_and_context(collector):
                 assert (await client.get('/fail')).status_code == 500
         asyncio.run(exercise())
         assert telemetry.flush()
+        assert state['user_agent'] == 'Everock-Python-SDK'
         events = inbound(batches)
         assert len(events) == 2
         assert events[0]['payload']['path'] == '/orders/{order_id}'
