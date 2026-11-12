@@ -31,7 +31,7 @@ export function registerAlertTools(server:McpServer, call:ApiCall, wrap:Wrap) {
     const current=await call<Watcher>(`/v1/projects/${projectId}/watcher`);
     return result({projectId,detectionPolicy:policy(current.detectionPolicy),recommended:detection.parse({})});
   }));
-  server.tool('update_detection_settings','Change advanced problem-detection settings for the project owner. Read current settings first; changes contains only fields requested by the user and preserves the rest. minRequests/errorRatePercent=0 disables that gate. Does not disable detection or change agent/notification configuration.',{projectId,changes:detection.partial().strict().refine(value=>Object.keys(value).length>0,'Provide at least one setting.')},wrap(async({projectId,changes})=>{
+  server.tool('update_detection_settings','Change advanced problem-detection settings for the project owner. Read current settings first; changes contains only fields requested by the user and preserves the rest. minRequests/errorRatePercent=0 disables that gate. Does not disable detection or change agent/notification configuration.',{projectId,changes:z.strictObject(Object.fromEntries(Object.entries(detection.shape).map(([field, schema]) => [field, schema.unwrap().optional()]))).refine(value=>Object.keys(value).length>0,'Provide at least one setting.')},wrap(async({projectId,changes})=>{
     const current=await call<Watcher>(`/v1/projects/${projectId}/watcher`);
     const next=detection.parse({...policy(current.detectionPolicy),...changes});
     const saved=await call<Watcher>(`/v1/projects/${projectId}/watcher`,{method:'PATCH',body:{detectionPolicy:next}});
@@ -45,7 +45,7 @@ export function registerAlertTools(server:McpServer, call:ApiCall, wrap:Wrap) {
     const current=await call<{services:Service[]}>(`/v1/projects/${projectId}/services`);
     return result({projectId,monitors:current.services.map(safeMonitor)});
   }));
-  server.tool('update_monitor_alert_settings','Change advanced alert settings of an existing manual service/endpoint monitor. List monitors first. enabled controls Inbox reports, not scheduled HTTP requests. latencyWarningMs=null disables slow-response warnings. Preserves URL, schedule and unrelated preferences. Updating rules resets check streaks.',{projectId,serviceId:z.string().uuid(),changes:monitor.partial().strict().refine(value=>Object.keys(value).length>0,'Provide at least one setting.')},wrap(async({projectId,serviceId,changes})=>{
+  server.tool('update_monitor_alert_settings','Change advanced alert settings of an existing manual service/endpoint monitor. List monitors first. enabled controls Inbox reports, not scheduled HTTP requests. latencyWarningMs=null disables slow-response warnings. Preserves URL, schedule and unrelated preferences. Updating rules resets check streaks.',{projectId,serviceId:z.string().uuid(),changes:z.strictObject(Object.fromEntries(Object.entries(monitor.shape).map(([field, schema]) => [field, schema.unwrap().optional()]))).refine(value=>Object.keys(value).length>0,'Provide at least one setting.')},wrap(async({projectId,serviceId,changes})=>{
     const current=await call<{services:Service[]}>(`/v1/projects/${projectId}/services`);
     const service=current.services.find(item=>item.id===serviceId);
     if(!service||service.source!=='manual')throw new Error('Manual monitor not found in this project.');
