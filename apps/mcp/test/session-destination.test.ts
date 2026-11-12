@@ -15,8 +15,8 @@ test('local MCP keeps the saved CLI session bound to its API address', async () 
     requests++;
     assert.equal(request.headers.authorization, 'Bearer local-fixture');
     response.writeHead(200, { 'content-type': 'application/json' });
-    if (request.url === `/v1/projects/${projectId}/env?only=keys`) {
-      response.end(JSON.stringify({ vars: [{ key: 'SETTING', value: 'private-fixture' }] }));
+    if (request.url === `/v1/projects/${projectId}/incidents?status=open`) {
+      response.end(JSON.stringify({ incidents: [{ title: 'Checkout failed' }] }));
       return;
     }
     response.end('{"projects":[]}');
@@ -40,10 +40,10 @@ test('local MCP keeps the saved CLI session bound to its API address', async () 
         assert.equal(result.isError === true, denied);
         assert.equal(requests, denied ? 0 : 1);
         if (!denied) {
-          const env = await client.callTool({ name: 'get_env', arguments: { projectId } });
-          assert.notEqual(env.isError, true);
-          const content = env.content as { text: string }[];
-          assert.deepEqual(JSON.parse(content[0]!.text), { vars: [{ key: 'SETTING' }] });
+          const incidents = await client.callTool({ name: 'get_incidents', arguments: { projectId } });
+          assert.notEqual(incidents.isError, true);
+          const content = incidents.content as { text: string }[];
+          assert.deepEqual(JSON.parse(content[0]!.text), { incidents: [{ title: 'Checkout failed' }] });
         }
       } finally { await client.close(); }
     }
@@ -73,6 +73,13 @@ test('remote tools require the authenticated user even when a valid CLI session 
     process.env.EVEROCK_CONFIG_DIR = directory;
     const [left, right] = InMemoryTransport.createLinkedPair();
     await Promise.all([server.connect(right), client.connect(left)]);
+    const names = new Set((await client.listTools()).tools.map(tool => tool.name));
+    for (const name of ['get_incidents', 'get_incident_context', 'update_incident_progress', 'add_incident_note']) {
+      assert.ok(names.has(name), name);
+    }
+    for (const name of ['get_stats', 'get_env', 'restart_project', 'rollback_deployment', 'publish_project', 'unpublish_project']) {
+      assert.equal(names.has(name), false, name);
+    }
     const result = await client.callTool({ name: 'list_projects', arguments: {} });
     assert.equal(result.isError, true);
     assert.deepEqual(result.content, [{ type: 'text', text: 'Error: OAuth user identity required.' }]);
