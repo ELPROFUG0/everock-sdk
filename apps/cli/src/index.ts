@@ -21,6 +21,7 @@ import { homedir } from 'node:os';
 import { join, relative, resolve, sep } from 'node:path';
 import { parseArgs } from 'node:util';
 import chokidar from 'chokidar';
+import { ignoredSyncPaths, privateSyncName } from './sync-policy.js';
 
 // ─── config (global key) + link (per-project, in cwd) ───
 const CONFIG_DIR = resolve(process.env.EVEROCK_CONFIG_DIR ?? join(homedir(), '.everock'));
@@ -91,8 +92,7 @@ const IGNORE = new Set([
 const MAX_FILE = 10 * 1024 * 1024; // 10 MB per file
 
 function excludedFromSync(name: string): boolean {
-  return IGNORE.has(name) || name === '.env' || name.startsWith('.env.') ||
-    name === '.npmrc' || name === '.pypirc' || /\.(pem|key|p12|pfx)$/i.test(name);
+  return IGNORE.has(name) || privateSyncName(name);
 }
 
 function walk(root: string, dir = root, out: string[] = []): string[] {
@@ -155,10 +155,16 @@ function detectProjectLogo(root: string) {
 async function syncFiles(cfg: Config, projectId: string, files: string[], deletes: string[]) {
   if (!files.length && !deletes.length) return;
   const root = process.cwd();
+  const ignored = ignoredSyncPaths(root, [...files.map(file => toRel(root, file)), ...deletes]);
+  const eligible = (path: string) => {
+    const full = resolve(root, path);
+    return full !== CONFIG_FILE && !(CONFIG_DIR !== root && full.startsWith(CONFIG_DIR + sep)) &&
+      !ignored.has(path) && !path.split('/').some(excludedFromSync) && !path.startsWith('../');
+  };
+  const publicDeletes = deletes.filter(eligible);
   const payload = files.flatMap((file) => {
     const path = toRel(root, file);
-    if (file === CONFIG_FILE || (CONFIG_DIR !== root && file.startsWith(CONFIG_DIR + sep))) return [];
-    if (path.split('/').some(excludedFromSync) || path.startsWith('../')) return [];
+    if (!eligible(path)) return [];
     let content: string;
     try {
       if (realpathSync(file) !== file) return [];
@@ -171,12 +177,12 @@ async function syncFiles(cfg: Config, projectId: string, files: string[], delete
     }
     return [{ path, content }];
   });
-  if (!payload.length && !deletes.length) return;
+  if (!payload.length && !publicDeletes.length) return;
   await apiCall(cfg, `/v1/projects/${projectId}/sync`, {
     method: 'POST',
     body: {
       files: payload,
-      deletes,
+      deletes: publicDeletes,
     },
   });
 }
