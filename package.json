@@ -7,7 +7,7 @@
   },
   "scripts": {
     "build": "node scripts/pack-public-packages.mjs",
-    "test": "node scripts/npm-artifacts-smoke.mjs"
+    "test": "node --experimental-strip-types --test packages/sdk/test/*.test.mjs && node scripts/npm-artifacts-smoke.mjs"
   },
   "devDependencies": {
     "typescript": "5.9.3"
