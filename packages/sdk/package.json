@@ -1,6 +1,6 @@
 {
   "name": "@everock/sdk",
-  "version": "0.1.0-beta.1",
+  "version": "0.1.0-beta.2",
   "description": "SDK \u2014 captures errors and telemetry (browser + server) and ships them to an Everock surface.",
   "type": "module",
   "main": "./src/index.ts",
